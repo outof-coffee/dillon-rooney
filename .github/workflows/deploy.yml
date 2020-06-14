@@ -1,0 +1,102 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+
+  build:
+    if: "!contains(github.event.head_commit.message, 'skip ci')"
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: GitHub Action for DigitalOcean - doctl
+        uses: digitalocean/action-doctl@v2.0.0
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Deploy container
+        env:
+          GO111MODULE: "on"
+          PROTOBUF_VERSION: "3.5.1"
+        run: |
+          doctl registry login
+          docker build -t ${{ secrets.CONTAINER_REGISTRY }}/hambone-frontend:${{ github.sha }} .
+          docker push ${{ secrets.CONTAINER_REGISTRY }}/hambone-frontend:${{ github.sha }}
+
+      - name: Kubectl install
+        uses: Azure/setup-kubectl@v1
+
+      - name: Generate Deployment
+        run: |
+          docker tag ${{ secrets.CONTAINER_REGISTRY }}/hambone-frontend:${{ github.sha }} ${{ secrets.CONTAINER_REGISTRY }}/hambone-frontend:production
+          docker push ${{ secrets.CONTAINER_REGISTRY }}/hambone-frontend:production
+          cat << EOF > deploy.yaml
+          apiVersion: extensions/v1beta1
+          kind: Ingress
+          metadata:
+            name: ${{ secrets.DEPLOYMENT_SLUG }}-ingress
+            annotations:
+              cert-manager.io/cluster-issuer: "letsencrypt-prod"
+          spec:
+            rules:
+            - host: dillon-rooney.outof.coffee
+              http:
+                paths:
+                - backend:
+                    serviceName: ${{ secrets.DEPLOYMENT_SLUG }}
+                    servicePort: 80
+            - host: hamill-clooney.outof.coffee
+              http:
+                paths:
+                - backend:
+                    serviceName: ${{ secrets.DEPLOYMENT_SLUG }}
+                    servicePort: 80
+            tls:
+            - secretName: ${{ secrets.DEPLOYMENT_SLUG }}-cert
+              hosts:
+                - dillon-rooney.outof.coffee
+                - hamill-clooney.outof.coffee
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${{ secrets.DEPLOYMENT_SLUG }}
+          spec:
+            ports:
+            - port: 80
+              targetPort: 80
+            selector:
+              app: ${{ secrets.DEPLOYMENT_SLUG }}
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${{ secrets.DEPLOYMENT_SLUG }}
+          spec:
+            selector:
+              matchLabels:
+                app: ${{ secrets.DEPLOYMENT_SLUG }}
+            replicas: 1
+            template:
+              metadata:
+                labels:
+                  app: ${{ secrets.DEPLOYMENT_SLUG }}
+              spec:
+                containers:
+                - name: ${{ secrets.DEPLOYMENT_SLUG }}
+                  image: ${{ secrets.CONTAINER_REGISTRY }}/hambone-frontend:production
+                  imagePullPolicy: Always
+                  ports:
+                  - containerPort: 80
+          EOF
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DEPLOYMENT_CLUSTER }}
+          kubectl apply --validate=true --dry-run=true --filename=deploy.yaml
+
+      - name: Execute Deployment
+        run: |
+          echo k8s deploy
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DEPLOYMENT_CLUSTER }}
+          kubectl apply --validate=true --filename=deploy.yaml
