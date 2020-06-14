@@ -17,6 +17,9 @@ jobs:
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
+      - name: Check out code
+        uses: actions/checkout@v2
+
       - name: Deploy container
         env:
           GO111MODULE: "on"
